@@ -11,36 +11,38 @@ import random
 # ✅ CONFIG
 # ============================
 ALPHA_VANTAGE_API_KEY = "IY2HMVXFHXE83LB5"  # Replace with your key
-HUGGINGFACE_BASE_URL = "https://huggingface.co/datasets/shaikfakruddin18/stock-predictor-model/resolve/main/"
+
+# 🔗 Your GitHub repo raw URL base (change this to your repo!)
+GITHUB_BASE_URL = "https://raw.githubusercontent.com/<your-username>/<your-repo>/main/data/"
 
 SUPABASE_URL = "https://rrvsbizwikocatkdhyfs.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJydnNiaXp3aWtvY2F0a2RoeWZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI5NjExNDAsImV4cCI6MjA2ODUzNzE0MH0.YWP65KQvwna1yQlhjksyT9Rhpyn5bBw5MDlMVHTF62Q"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ============================
-# ✅ FETCH FUNCTIONS (WITH TIMEOUT + CACHE)
+# ✅ FETCH FUNCTIONS
 # ============================
 
-@st.cache_data(ttl=600)
-def fetch_from_huggingface(ticker):
-    """Fetch pre-downloaded CSV from Hugging Face (fast fail if not found)"""
-    csv_url = f"{HUGGINGFACE_BASE_URL}{ticker}.csv"
-    st.write(f"🔍 Trying Hugging Face: {csv_url}")
+def fetch_from_github(ticker):
+    """Fetch pre-downloaded CSV from GitHub repo"""
+    csv_url = f"{GITHUB_BASE_URL}{ticker}.csv"
+    st.write(f"🔍 Trying GitHub CSV: {csv_url}")
     try:
         response = requests.get(csv_url, timeout=10)
         if response.status_code == 200:
-            df = pd.read_csv(pd.compat.StringIO(response.text))
+            df = pd.read_csv(csv_url)
             if not df.empty:
-                st.success(f"✅ Loaded from Hugging Face: {ticker}.csv")
+                st.success(f"✅ Loaded from GitHub CSV: {ticker}.csv")
                 if "Date" not in df.columns:
                     df.rename(columns={df.columns[0]: "Date"}, inplace=True)
                 df["Date"] = pd.to_datetime(df["Date"])
                 return df
+        else:
+            st.warning(f"⚠ GitHub returned {response.status_code} for {ticker}")
     except Exception as e:
-        st.warning(f"⚠ Hugging Face failed: {e}")
+        st.warning(f"⚠ GitHub CSV failed: {e}")
     return pd.DataFrame()
 
-@st.cache_data(ttl=600)
 def fetch_yahoo_data(ticker, period="3mo"):
     """Fetch historical daily data from Yahoo Finance"""
     st.write("🔍 Trying Yahoo Finance...")
@@ -55,7 +57,6 @@ def fetch_yahoo_data(ticker, period="3mo"):
         st.warning(f"⚠ Yahoo Finance error: {e}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=600)
 def fetch_alpha_vantage_intraday(ticker, interval="5min"):
     """Fetch intraday data from Alpha Vantage"""
     st.write("🔍 Trying Alpha Vantage...")
@@ -83,11 +84,11 @@ def fetch_alpha_vantage_intraday(ticker, interval="5min"):
         return pd.DataFrame()
 
 def unified_fetch_stock_data(ticker, period="3mo", interval="5min"):
-    """Try Hugging Face → Yahoo → Alpha Vantage"""
-    # 1️⃣ Hugging Face first
-    df = fetch_from_huggingface(ticker)
+    """Try GitHub CSV → Yahoo → Alpha Vantage"""
+    # 1️⃣ GitHub CSV first
+    df = fetch_from_github(ticker)
     if not df.empty:
-        return df, "HuggingFace"
+        return df, "GitHub CSV"
     
     # 2️⃣ Yahoo Finance next
     df = fetch_yahoo_data(ticker, period)
