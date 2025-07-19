@@ -4,28 +4,34 @@ import joblib
 import os
 import datetime
 import plotly.graph_objects as go
+import requests
 
-# ✅ MODEL AUTO-DOWNLOAD (using gdown for reliable Google Drive fetch)
+# ✅ MODEL AUTO-DOWNLOAD FROM DROPBOX WITH DEBUGGING
 MODEL_PATH = "rf_model.joblib"
-MODEL_ID = "https://www.dropbox.com/scl/fi/in6x2tdi7x1bz1cv3esvv/rf_model.joblib.joblib?rlkey=sjr2br8qll5rsp792rscgh865&st=ib3av7uh&dl=1"
+MODEL_URL = "https://www.dropbox.com/scl/fi/in6x2tdi7x1bz1cv3esvv/rf_model.joblib.joblib?rlkey=sjr2br8qll5rsp792rscgh865&st=ib3av7uh&dl=1"
 
-
-# Install gdown if not present
-try:
-    import gdown
-except ImportError:
-    os.system("pip install gdown")
-    import gdown
-
-# Download model if missing
 if not os.path.exists(MODEL_PATH):
-    st.write("📥 Downloading model from Google Drive...")
-    gdown.download(f"https://drive.google.com/uc?id={MODEL_ID}", MODEL_PATH, quiet=False)
-    st.write("✅ Model downloaded successfully!")
+    st.write("📥 Downloading model from Dropbox...")
+    response = requests.get(MODEL_URL)
 
-# Load the model safely
+    # Save the downloaded content
+    with open(MODEL_PATH, "wb") as f:
+        f.write(response.content)
+
+    # ✅ Show file size
+    st.write(f"✅ Model downloaded! File size: {len(response.content)} bytes")
+
+    # ✅ Debug: Check if it's HTML instead of model
+    preview = response.content[:200].decode(errors="ignore")
+    if "<html" in preview.lower():
+        st.error("❌ Dropbox returned an HTML page, NOT the model binary!")
+        st.text(preview)  # Show a snippet of the HTML
+        st.stop()
+
+# ✅ Try loading the model safely
 try:
     model = joblib.load(MODEL_PATH)
+    st.write("✅ Model loaded successfully!")
 except Exception as e:
     st.error(f"❌ Failed to load model: {e}")
     st.stop()
@@ -165,3 +171,4 @@ else:
 # ✅ FOOTER
 st.markdown("---")
 st.caption("🚀 Built with Streamlit | AI Stock Predictor Dashboard")
+
