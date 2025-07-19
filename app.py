@@ -18,53 +18,69 @@ SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ============================
-# ✅ FETCH FUNCTIONS
+# ✅ FETCH FUNCTIONS (WITH TIMEOUT + CACHE)
 # ============================
 
+@st.cache_data(ttl=600)
 def fetch_from_huggingface(ticker):
-    """Fetch pre-downloaded CSV from Hugging Face"""
+    """Fetch pre-downloaded CSV from Hugging Face (fast fail if not found)"""
     csv_url = f"{HUGGINGFACE_BASE_URL}{ticker}.csv"
+    st.write(f"🔍 Trying Hugging Face: {csv_url}")
     try:
-        df = pd.read_csv(csv_url)
-        if not df.empty:
-            st.success(f"✅ Loaded from Hugging Face: {ticker}.csv")
-            # Normalize columns
-            if "Date" not in df.columns:
-                df.rename(columns={df.columns[0]: "Date"}, inplace=True)
-            df["Date"] = pd.to_datetime(df["Date"])
-            return df
-    except Exception:
-        st.warning(f"⚠ No Hugging Face CSV found for {ticker}")
+        response = requests.get(csv_url, timeout=10)
+        if response.status_code == 200:
+            df = pd.read_csv(pd.compat.StringIO(response.text))
+            if not df.empty:
+                st.success(f"✅ Loaded from Hugging Face: {ticker}.csv")
+                if "Date" not in df.columns:
+                    df.rename(columns={df.columns[0]: "Date"}, inplace=True)
+                df["Date"] = pd.to_datetime(df["Date"])
+                return df
+    except Exception as e:
+        st.warning(f"⚠ Hugging Face failed: {e}")
     return pd.DataFrame()
 
+@st.cache_data(ttl=600)
 def fetch_yahoo_data(ticker, period="3mo"):
     """Fetch historical daily data from Yahoo Finance"""
-    df = yf.download(ticker, period=period, interval="1d")
-    if df.empty:
+    st.write("🔍 Trying Yahoo Finance...")
+    try:
+        df = yf.download(ticker, period=period, interval="1d", progress=False)
+        if df.empty:
+            return pd.DataFrame()
+        df.reset_index(inplace=True)
+        st.success("✅ Yahoo Finance data fetched successfully!")
+        return df
+    except Exception as e:
+        st.warning(f"⚠ Yahoo Finance error: {e}")
         return pd.DataFrame()
-    df.reset_index(inplace=True)
-    st.success("✅ Yahoo Finance data fetched successfully!")
-    return df
 
+@st.cache_data(ttl=600)
 def fetch_alpha_vantage_intraday(ticker, interval="5min"):
     """Fetch intraday data from Alpha Vantage"""
+    st.write("🔍 Trying Alpha Vantage...")
     url = (
         f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY"
         f"&symbol={ticker}&interval={interval}&apikey={ALPHA_VANTAGE_API_KEY}&datatype=json"
     )
-    r = requests.get(url).json()
-    key = f"Time Series ({interval})"
-    if key not in r:
+    try:
+        r = requests.get(url, timeout=10).json()
+        key = f"Time Series ({interval})"
+        if key not in r:
+            st.error("❌ Alpha Vantage returned no data.")
+            return pd.DataFrame()
+        df = pd.DataFrame(r[key]).T
+        df.columns = ["Open", "High", "Low", "Close", "Volume"]
+        df.index = pd.to_datetime(df.index)
+        df = df.sort_index()
+        df.reset_index(inplace=True)
+        df.rename(columns={"index": "Datetime"}, inplace=True)
+        df[["Open", "High", "Low", "Close", "Volume"]] = df[["Open", "High", "Low", "Close", "Volume"]].astype(float)
+        st.success("✅ Alpha Vantage intraday data fetched!")
+        return df
+    except Exception as e:
+        st.error(f"❌ Alpha Vantage fetch error: {e}")
         return pd.DataFrame()
-    df = pd.DataFrame(r[key]).T
-    df.columns = ["Open", "High", "Low", "Close", "Volume"]
-    df.index = pd.to_datetime(df.index)
-    df = df.sort_index()
-    df.reset_index(inplace=True)
-    df.rename(columns={"index": "Datetime"}, inplace=True)
-    df[["Open", "High", "Low", "Close", "Volume"]] = df[["Open", "High", "Low", "Close", "Volume"]].astype(float)
-    st.success("✅ Alpha Vantage intraday data fetched!")
-    return df
 
 def unified_fetch_stock_data(ticker, period="3mo", interval="5min"):
     """Try Hugging Face → Yahoo → Alpha Vantage"""
@@ -141,7 +157,7 @@ def load_prediction_history_supabase():
 st.set_page_config(page_title="AI Stock Predictor", layout="wide")
 st.sidebar.title("📊 Navigation")
 
-st.sidebar.subheader("Select Data Source")
+st.sidebar.subheader("Stock Selection")
 ticker = st.sidebar.text_input("Enter Stock Ticker (e.g. RELIANCE.NS, AAPL, HDFCBANK.NS)", "RELIANCE.NS")
 period = st.sidebar.selectbox("Select Period", ["1mo", "3mo", "6mo", "1y", "2y"], index=1)
 interval = st.sidebar.selectbox("Intraday Interval (for Alpha Vantage fallback)", ["1min", "5min", "15min", "30min", "60min"], index=1)
@@ -153,19 +169,25 @@ if st.sidebar.button("Fetch Data"):
         df, source_name = unified_fetch_stock_data(ticker, period, interval)
 
     if df is None or df.empty:
-        st.error("❌ No data returned. Check ticker or date range.")
+        st.error("❌ No data returned from any source. Try a different ticker.")
     else:
         st.subheader(f"Stock Data: {ticker} ({source_name})")
+        
+        # ✅ Debug preview
+        st.write("🔍 Data preview (first 5 rows):")
+        st.dataframe(df.head())
+
+        # ✅ Plot chart
         st.plotly_chart(plot_candlestick(df, f"{ticker} Price Chart"), use_container_width=True)
 
-        # Simulated AI Prediction (later integrate your real model)
+        # ✅ Simulated AI Prediction (replace with your ML model later)
         prediction = random.choice(["UP", "DOWN"])
-        confidence = random.uniform(51, 70)
+        confidence = random.uniform(51, 75)
 
         st.markdown(f"### Prediction: **{prediction}**")
         st.markdown(f"### Confidence: **{confidence:.2f}%**")
 
-        # Save to Supabase
+        # ✅ Save to Supabase
         save_prediction_to_supabase(ticker, prediction, confidence, source_name)
 
 # ✅ Show Prediction History
@@ -175,6 +197,7 @@ if not history_df.empty:
     st.dataframe(history_df[["created_at", "stock", "prediction", "confidence", "source"]])
 else:
     st.info("No prediction history yet.")
+
 
 
 
