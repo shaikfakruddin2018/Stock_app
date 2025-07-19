@@ -44,7 +44,6 @@ def fetch_live_data(ticker, period="6mo"):
     return df
 
 def add_technical_indicators(df):
-    # ✅ Check for valid data
     if df is None or df.empty:
         st.warning("⚠️ No valid data to calculate indicators.")
         return df
@@ -53,14 +52,15 @@ def add_technical_indicators(df):
         st.error("❌ Invalid data format. Try another ticker.")
         return pd.DataFrame()
 
-    # ✅ Ensure numeric columns
+    # Ensure numeric
     for col in ["Close", "High", "Low"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
     df = df.dropna(subset=["Close", "High", "Low"])
 
+    # ✅ Require at least 20 rows for stable indicators
     if len(df) < 20:
-        st.warning("⚠️ Too few rows after cleaning for indicators.")
+        st.warning(f"⚠️ Too few rows ({len(df)}) for indicators. Try a longer period.")
         return df
 
     # ✅ RSI
@@ -77,14 +77,20 @@ def add_technical_indicators(df):
     df["BB_Low"] = bb.bollinger_lband()
     df["BB_Width"] = df["BB_High"] - df["BB_Low"]
 
-    # ✅ ADX
-    adx = ta.trend.ADXIndicator(df["High"], df["Low"], df["Close"], window=14)
-    df["ADX"] = adx.adx()
+    # ✅ Only compute ADX if enough rows
+    if len(df) >= 15:
+        adx = ta.trend.ADXIndicator(df["High"], df["Low"], df["Close"], window=14)
+        df["ADX"] = adx.adx()
+    else:
+        df["ADX"] = None
 
-    # ✅ Stochastic Oscillator
-    stoch = ta.momentum.StochRSIIndicator(df["Close"], window=14)
-    df["Stoch_K"] = stoch.stochrsi_k()
-    df["Stoch_D"] = stoch.stochrsi_d()
+    # ✅ Only compute Stoch if enough rows
+    if len(df) >= 15:
+        stoch = ta.momentum.StochRSIIndicator(df["Close"], window=14)
+        df["Stoch_K"] = stoch.stochrsi_k()
+        df["Stoch_D"] = stoch.stochrsi_d()
+    else:
+        df["Stoch_K"], df["Stoch_D"] = None, None
 
     # ✅ Lag Features
     df["Lag_1"] = df["Close"].shift(1)
@@ -220,6 +226,7 @@ else:
 # ✅ FOOTER
 st.markdown("---")
 st.caption("🚀 Built with Streamlit | AI Stock Predictor Dashboard")
+
 
 
 
