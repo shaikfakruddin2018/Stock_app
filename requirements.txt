@@ -5,5 +5,5 @@ plotly
 joblib
 scikit-learn
 requests
-gdown
+
 
