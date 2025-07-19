@@ -6,29 +6,19 @@ import datetime
 import plotly.graph_objects as go
 import requests
 
-# ✅ MODEL AUTO-DOWNLOAD FROM DROPBOX WITH DEBUGGING
-MODEL_PATH = "rf_model.joblib"
-MODEL_URL = "https://www.dropbox.com/scl/fi/in6x2tdi7x1bz1cv3esvv/rf_model.joblib.joblib?rlkey=sjr2br8qll5rsp792rscgh865&st=ib3av7uh&dl=1"
+# ✅ MODEL AUTO-DOWNLOAD FROM HUGGING FACE
+MODEL_PATH = "rf_model.joblib.joblib"
+MODEL_URL = "https://huggingface.co/shaikfakruddin18/stock-predictor-model/resolve/main/rf_model.joblib.joblib"
 
+# ✅ Download model if not already present
 if not os.path.exists(MODEL_PATH):
-    st.write("📥 Downloading model from Dropbox...")
+    st.write("📥 Downloading model from Hugging Face Hub...")
     response = requests.get(MODEL_URL)
-
-    # Save the downloaded content
     with open(MODEL_PATH, "wb") as f:
         f.write(response.content)
+    st.write(f"✅ Model downloaded successfully! Size: {len(response.content)} bytes")
 
-    # ✅ Show file size
-    st.write(f"✅ Model downloaded! File size: {len(response.content)} bytes")
-
-    # ✅ Debug: Check if it's HTML instead of model
-    preview = response.content[:200].decode(errors="ignore")
-    if "<html" in preview.lower():
-        st.error("❌ Dropbox returned an HTML page, NOT the model binary!")
-        st.text(preview)  # Show a snippet of the HTML
-        st.stop()
-
-# ✅ Try loading the model safely
+# ✅ Try loading model safely
 try:
     model = joblib.load(MODEL_PATH)
     st.write("✅ Model loaded successfully!")
