@@ -9,6 +9,9 @@ import requests
 import yfinance as yf
 import ta
 
+# ✅ Alpha Vantage API Key
+ALPHA_VANTAGE_KEY = "IY2HMVXFHXE83LB5"
+
 # ✅ MODEL DOWNLOAD FROM HUGGING FACE
 MODEL_PATH = "rf_model.joblib.joblib"
 MODEL_URL = "https://huggingface.co/shaikfakruddin18/stock-predictor-model/resolve/main/rf_model.joblib.joblib"
@@ -26,8 +29,8 @@ model = joblib.load(MODEL_PATH)
 # ✅ PAGE CONFIG
 st.set_page_config(page_title="AI Stock Predictor Dashboard", page_icon="📈", layout="wide")
 
-# ✅ FUNCTIONS
-def fetch_live_data(ticker, period="6mo"):
+# ✅ Fetch Yahoo Finance Data
+def fetch_yahoo_data(ticker, period="6mo"):
     df = yf.download(ticker, period=period, interval="1d")
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
@@ -36,6 +39,25 @@ def fetch_live_data(ticker, period="6mo"):
     df = df[[c for c in expected_cols if c in df.columns]]
     return df
 
+# ✅ Fetch Alpha Vantage Intraday Data
+def fetch_alpha_intraday(symbol, interval="15min"):
+    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={symbol}&interval={interval}&apikey={ALPHA_VANTAGE_KEY}"
+    r = requests.get(url).json()
+    key = f"Time Series ({interval})"
+    if key not in r:
+        st.error("❌ Alpha Vantage API limit reached or invalid symbol")
+        return pd.DataFrame()
+    df = pd.DataFrame.from_dict(r[key], orient="index")
+    df.columns = ["Open", "High", "Low", "Close", "Volume"]
+    df = df.astype(float).reset_index().rename(columns={"index": "Datetime"})
+    df = df.sort_values("Datetime")
+    # Convert to datetime
+    df["Datetime"] = pd.to_datetime(df["Datetime"])
+    # Rename to match model expectations
+    df.rename(columns={"Datetime": "Date"}, inplace=True)
+    return df
+
+# ✅ Safe ADX & Stoch Wrappers
 def safe_adx(df):
     try:
         adx = ta.trend.ADXIndicator(df["High"], df["Low"], df["Close"], window=14)
@@ -52,6 +74,7 @@ def safe_stoch(df):
         st.warning("⚠️ Could not compute Stochastic RSI.")
         return pd.Series([None] * len(df)), pd.Series([None] * len(df))
 
+# ✅ Add Technical Indicators
 def add_technical_indicators(df):
     if df is None or df.empty:
         st.warning("⚠️ No valid data to calculate indicators.")
@@ -88,6 +111,7 @@ def add_technical_indicators(df):
 
     return df
 
+# ✅ Plotting
 def plot_candlestick(df):
     fig = go.Figure()
     fig.add_trace(go.Candlestick(x=df["Date"], open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="Price"))
@@ -105,6 +129,7 @@ def plot_rsi_macd(df):
     fig.update_layout(height=300, template="plotly_dark")
     return fig
 
+# ✅ Prediction History
 def save_prediction(stock, prediction, confidence):
     history_file = "prediction_history.csv"
     entry = pd.DataFrame([[datetime.datetime.now(), stock, prediction, confidence]], columns=["Time", "Stock", "Prediction", "Confidence"])
@@ -118,7 +143,7 @@ def load_prediction_history():
         return pd.read_csv("prediction_history.csv")
     return pd.DataFrame(columns=["Time", "Stock", "Prediction", "Confidence"])
 
-# ✅ SIDEBAR
+# ✅ Sidebar
 st.sidebar.title("📊 Navigation")
 menu = st.sidebar.radio("Go to:", ["📈 Stock Predictor", "🧠 Focus Tasks"])
 
@@ -139,18 +164,20 @@ if menu == "🧠 Focus Tasks":
 else:
     st.title("📈 AI Stock Predictor Dashboard")
 
-    source = st.sidebar.radio("📂 Select Data Source", ["Local CSV", "Live Yahoo Finance"])
+    # ✅ Choose Data Source
+    data_source = st.sidebar.radio("📂 Select Data Source", ["Yahoo Finance (Daily)", "Alpha Vantage (Intraday)"])
 
-    if source == "Live Yahoo Finance":
-        ticker = st.sidebar.text_input("Enter Stock Ticker (e.g. AAPL, TSLA)", "AAPL")
+    # ✅ Stock symbol input
+    ticker = st.sidebar.text_input("Enter Stock Ticker (e.g. RELIANCE.BSE, AAPL)", "RELIANCE.BSE")
+
+    if data_source == "Yahoo Finance (Daily)":
         period = st.sidebar.selectbox("Select Period", ["1mo", "3mo", "6mo", "1y"])
-        df = fetch_live_data(ticker, period)
+        df = fetch_yahoo_data(ticker, period)
     else:
-        data_dir = "stock_data_with_indicators"
-        files = [f for f in os.listdir(data_dir) if f.endswith(".csv")]
-        selected_file = st.sidebar.selectbox("Select Stock CSV", files)
-        df = pd.read_csv(os.path.join(data_dir, selected_file))
+        interval = st.sidebar.selectbox("Intraday Interval", ["5min", "15min", "30min", "60min"], index=1)
+        df = fetch_alpha_intraday(ticker, interval)
 
+    # ✅ Normalize Date
     if df is not None and not df.empty:
         if "Date" not in df.columns:
             if df.index.name in ["Date", "Datetime", None]:
@@ -188,7 +215,7 @@ else:
                 with col2:
                     st.metric("Confidence", confidence)
 
-                stock_name = ticker if source == "Live Yahoo Finance" else selected_file
+                stock_name = ticker
                 save_prediction(stock_name, direction, confidence)
 
                 st.subheader("📝 Prediction History")
@@ -206,7 +233,8 @@ else:
             st.warning("⚠️ Data invalid or too short for indicators.")
 
 st.markdown("---")
-st.caption("🚀 Built with Streamlit | AI Stock Predictor Dashboard")
+st.caption("🚀 Built with Streamlit | AI Stock Predictor Dashboard (Yahoo + Alpha Vantage Intraday)")
+
 
 
 
