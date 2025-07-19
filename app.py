@@ -1,203 +1,167 @@
 import streamlit as st
 import pandas as pd
-import yfinance as yf
-import requests
+import joblib
+import os
+import datetime
 import plotly.graph_objects as go
-from datetime import datetime
-from supabase import create_client, Client
-import random
+import requests
 
-# ============================
-# ✅ CONFIG
-# ============================
-ALPHA_VANTAGE_API_KEY = "IY2HMVXFHXE83LB5"  # Replace with your key
+# ✅ MODEL AUTO-DOWNLOAD FROM HUGGING FACE
+MODEL_PATH = "rf_model.joblib.joblib"
+MODEL_URL = "https://huggingface.co/shaikfakruddin18/stock-predictor-model/resolve/main/rf_model.joblib.joblib"
 
-# 🔗 Your GitHub repo raw URL base (change this to your repo!)
-GITHUB_BASE_URL = "https://raw.githubusercontent.com/<your-username>/<your-repo>/main/data/"
+# ✅ Download model if not already present
+if not os.path.exists(MODEL_PATH):
+    st.write("📥 Downloading model from Hugging Face Hub...")
+    response = requests.get(MODEL_URL)
+    with open(MODEL_PATH, "wb") as f:
+        f.write(response.content)
+    st.write(f"✅ Model downloaded successfully! Size: {len(response.content)} bytes")
 
-SUPABASE_URL = "https://rrvsbizwikocatkdhyfs.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJydnNiaXp3aWtvY2F0a2RoeWZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI5NjExNDAsImV4cCI6MjA2ODUzNzE0MH0.YWP65KQvwna1yQlhjksyT9Rhpyn5bBw5MDlMVHTF62Q"
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# ✅ Try loading model safely
+try:
+    model = joblib.load(MODEL_PATH)
+    st.write("✅ Model loaded successfully!")
+except Exception as e:
+    st.error(f"❌ Failed to load model: {e}")
+    st.stop()
 
-# ============================
-# ✅ FETCH FUNCTIONS
-# ============================
+# ✅ PAGE CONFIG
+st.set_page_config(
+    page_title="AI Stock Predictor Dashboard",
+    page_icon="📈",
+    layout="wide",
+)
 
-def fetch_from_github(ticker):
-    """Fetch pre-downloaded CSV from GitHub repo"""
-    csv_url = f"{GITHUB_BASE_URL}{ticker}.csv"
-    st.write(f"🔍 Trying GitHub CSV: {csv_url}")
-    try:
-        response = requests.get(csv_url, timeout=10)
-        if response.status_code == 200:
-            df = pd.read_csv(csv_url)
-            if not df.empty:
-                st.success(f"✅ Loaded from GitHub CSV: {ticker}.csv")
-                if "Date" not in df.columns:
-                    df.rename(columns={df.columns[0]: "Date"}, inplace=True)
-                df["Date"] = pd.to_datetime(df["Date"])
-                return df
-        else:
-            st.warning(f"⚠ GitHub returned {response.status_code} for {ticker}")
-    except Exception as e:
-        st.warning(f"⚠ GitHub CSV failed: {e}")
-    return pd.DataFrame()
-
-def fetch_yahoo_data(ticker, period="3mo"):
-    """Fetch historical daily data from Yahoo Finance"""
-    st.write("🔍 Trying Yahoo Finance...")
-    try:
-        df = yf.download(ticker, period=period, interval="1d", progress=False)
-        if df.empty:
-            return pd.DataFrame()
-        df.reset_index(inplace=True)
-        st.success("✅ Yahoo Finance data fetched successfully!")
-        return df
-    except Exception as e:
-        st.warning(f"⚠ Yahoo Finance error: {e}")
-        return pd.DataFrame()
-
-def fetch_alpha_vantage_intraday(ticker, interval="5min"):
-    """Fetch intraday data from Alpha Vantage"""
-    st.write("🔍 Trying Alpha Vantage...")
-    url = (
-        f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY"
-        f"&symbol={ticker}&interval={interval}&apikey={ALPHA_VANTAGE_API_KEY}&datatype=json"
-    )
-    try:
-        r = requests.get(url, timeout=10).json()
-        key = f"Time Series ({interval})"
-        if key not in r:
-            st.error("❌ Alpha Vantage returned no data.")
-            return pd.DataFrame()
-        df = pd.DataFrame(r[key]).T
-        df.columns = ["Open", "High", "Low", "Close", "Volume"]
-        df.index = pd.to_datetime(df.index)
-        df = df.sort_index()
-        df.reset_index(inplace=True)
-        df.rename(columns={"index": "Datetime"}, inplace=True)
-        df[["Open", "High", "Low", "Close", "Volume"]] = df[["Open", "High", "Low", "Close", "Volume"]].astype(float)
-        st.success("✅ Alpha Vantage intraday data fetched!")
-        return df
-    except Exception as e:
-        st.error(f"❌ Alpha Vantage fetch error: {e}")
-        return pd.DataFrame()
-
-def unified_fetch_stock_data(ticker, period="3mo", interval="5min"):
-    """Try GitHub CSV → Yahoo → Alpha Vantage"""
-    # 1️⃣ GitHub CSV first
-    df = fetch_from_github(ticker)
-    if not df.empty:
-        return df, "GitHub CSV"
-    
-    # 2️⃣ Yahoo Finance next
-    df = fetch_yahoo_data(ticker, period)
-    if not df.empty:
-        return df, "YahooFinance"
-    
-    # 3️⃣ Alpha Vantage fallback
-    df = fetch_alpha_vantage_intraday(ticker, interval)
-    if not df.empty:
-        return df, "AlphaVantage"
-    
-    return pd.DataFrame(), "None"
-
-# ============================
-# ✅ VISUALIZATION
-# ============================
-
-def plot_candlestick(df, title="Stock Price"):
-    fig = go.Figure(
-        data=[
-            go.Candlestick(
-                x=df[df.columns[0]],
-                open=df["Open"],
-                high=df["High"],
-                low=df["Low"],
-                close=df["Close"],
-            )
-        ]
-    )
-    fig.update_layout(title=title, xaxis_rangeslider_visible=False, height=400)
-    return fig
-
-# ============================
-# ✅ SUPABASE LOGGING
-# ============================
-
-def save_prediction_to_supabase(stock, prediction, confidence, source):
-    try:
-        created_at = datetime.utcnow().isoformat()
-        data = {
-            "created_at": created_at,
-            "stock": stock,
-            "prediction": prediction,
-            "confidence": f"{confidence:.2f}%",
-            "source": source
-        }
-        response = supabase.table("predictions").insert(data).execute()
-        if response.data:
-            st.success("✅ Prediction saved to Supabase!")
-        else:
-            st.error(f"❌ Failed to save prediction: {response}")
-    except Exception as e:
-        st.error(f"❌ Supabase error: {e}")
-
-def load_prediction_history_supabase():
-    try:
-        response = supabase.table("predictions").select("*").order("created_at", desc=True).execute()
-        return pd.DataFrame(response.data) if response.data else pd.DataFrame()
-    except Exception as e:
-        st.error(f"❌ Failed to load history: {e}")
-        return pd.DataFrame()
-
-# ============================
-# ✅ STREAMLIT UI
-# ============================
-
-st.set_page_config(page_title="AI Stock Predictor", layout="wide")
+# ✅ SIDEBAR NAVIGATION
 st.sidebar.title("📊 Navigation")
+menu = st.sidebar.radio("Go to:", ["📈 Stock Predictor", "🧠 Focus Tasks"])
 
-st.sidebar.subheader("Stock Selection")
-ticker = st.sidebar.text_input("Enter Stock Ticker (e.g. RELIANCE.NS, AAPL, HDFCBANK.NS)", "RELIANCE.NS")
-period = st.sidebar.selectbox("Select Period", ["1mo", "3mo", "6mo", "1y", "2y"], index=1)
-interval = st.sidebar.selectbox("Intraday Interval (for Alpha Vantage fallback)", ["1min", "5min", "15min", "30min", "60min"], index=1)
+# ✅ SESSION STATE for prediction history
+if "prediction_history" not in st.session_state:
+    st.session_state.prediction_history = []
 
-st.title("📈 AI Stock Predictor Dashboard")
+# ✅ FOCUS TASK PAGE
+if menu == "🧠 Focus Tasks":
+    st.title("🧠 Focus Task Assistant")
 
-if st.sidebar.button("Fetch Data"):
-    with st.spinner("Fetching stock data..."):
-        df, source_name = unified_fetch_stock_data(ticker, period, interval)
+    task = st.text_input("✍️ Add a task")
+    if st.button("➕ Add"):
+        if task:
+            st.session_state.setdefault("tasks", []).append(
+                {"task": task, "added": str(datetime.datetime.now())}
+            )
+            st.success("✅ Task added!")
 
-    if df is None or df.empty:
-        st.error("❌ No data returned from any source. Try a different ticker.")
-    else:
-        st.subheader(f"Stock Data: {ticker} ({source_name})")
-        
-        # ✅ Debug preview
-        st.write("🔍 Data preview (first 5 rows):")
-        st.dataframe(df.head())
+    st.subheader("📋 Your Tasks")
+    for i, t in enumerate(st.session_state.get("tasks", [])):
+        st.markdown(f"✅ {t['task']} *(added {t['added'].split('.')[0]})*")
 
-        # ✅ Plot chart
-        st.plotly_chart(plot_candlestick(df, f"{ticker} Price Chart"), use_container_width=True)
+    if st.button("🎯 Start Focus Timer"):
+        st.success("⏱️ Focus mode started for 25 mins! Stay focused.")
 
-        # ✅ Simulated AI Prediction (replace with your ML model later)
-        prediction = random.choice(["UP", "DOWN"])
-        confidence = random.uniform(51, 75)
-
-        st.markdown(f"### Prediction: **{prediction}**")
-        st.markdown(f"### Confidence: **{confidence:.2f}%**")
-
-        # ✅ Save to Supabase
-        save_prediction_to_supabase(ticker, prediction, confidence, source_name)
-
-# ✅ Show Prediction History
-st.subheader("📜 Prediction History (Cloud)")
-history_df = load_prediction_history_supabase()
-if not history_df.empty:
-    st.dataframe(history_df[["created_at", "stock", "prediction", "confidence", "source"]])
+# ✅ STOCK PREDICTOR PAGE
 else:
-    st.info("No prediction history yet.")
+    st.title("📈 AI Stock Predictor Dashboard")
+
+    data_dir = "stock_data_with_indicators"
+    if not os.path.exists(data_dir):
+        st.error(f"❌ Missing folder: {data_dir}")
+    else:
+        files = [f for f in os.listdir(data_dir) if f.endswith(".csv")]
+        selected_file = st.sidebar.selectbox("📂 Select Stock", files)
+
+        if selected_file:
+            df = pd.read_csv(
+                os.path.join(data_dir, selected_file), index_col=0, parse_dates=True
+            )
+
+            # Drop rows missing required indicators
+            df = df.dropna(
+                subset=[
+                    "MACD",
+                    "MACD_Signal",
+                    "BB_High",
+                    "BB_Low",
+                    "BB_Width",
+                    "ADX",
+                    "Stoch_K",
+                    "Stoch_D",
+                    "Lag_1",
+                    "Lag_3",
+                    "Lag_5",
+                ]
+            )
+
+            if not df.empty:
+                # ✅ Show Candlestick Chart
+                st.subheader("📊 Stock Price & Indicators")
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Candlestick(
+                        x=df.index,
+                        open=df["Open"],
+                        high=df["High"],
+                        low=df["Low"],
+                        close=df["Close"],
+                        name="Price",
+                    )
+                )
+                fig.update_layout(height=500, template="plotly_dark")
+                st.plotly_chart(fig, use_container_width=True)
+
+                # ✅ Prepare Latest Data for Prediction
+                latest = df[
+                    [
+                        "MACD",
+                        "MACD_Signal",
+                        "BB_High",
+                        "BB_Low",
+                        "BB_Width",
+                        "ADX",
+                        "Stoch_K",
+                        "Stoch_D",
+                        "Lag_1",
+                        "Lag_3",
+                        "Lag_5",
+                    ]
+                ].iloc[[-1]]
+
+                # ✅ Make Prediction
+                pred = model.predict(latest)[0]
+                prob = model.predict_proba(latest)[0]
+                direction = "📈 UP" if pred == 1 else "📉 DOWN"
+                confidence = f"{prob[pred]*100:.2f}%"
+
+                # ✅ Show Prediction Result
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Prediction", direction)
+                with col2:
+                    st.metric("Confidence", confidence)
+
+                # ✅ Save to History
+                st.session_state.prediction_history.append(
+                    {
+                        "Stock": selected_file,
+                        "Time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "Prediction": direction,
+                        "Confidence": confidence,
+                    }
+                )
+
+                # ✅ Show Prediction History
+                st.subheader("📝 Prediction History")
+                history_df = pd.DataFrame(st.session_state.prediction_history)
+                st.dataframe(history_df)
+
+            else:
+                st.warning("⚠️ Not enough data after cleaning.")
+
+# ✅ FOOTER
+st.markdown("---")
+st.caption("🚀 Built with Streamlit | AI Stock Predictor Dashboard")
+
 
 
 
