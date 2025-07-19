@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import requests
 import yfinance as yf
-import ta  # for RSI, MACD, Bollinger Bands
+import ta  # for RSI, MACD, Bollinger Bands, ADX, etc.
 
 # ✅ MODEL DOWNLOAD FROM HUGGING FACE
 MODEL_PATH = "rf_model.joblib.joblib"
@@ -33,13 +33,34 @@ def fetch_live_data(ticker, period="6mo"):
     return df
 
 def add_technical_indicators(df):
+    # RSI for visualization only
     df["RSI"] = ta.momentum.RSIIndicator(df["Close"], window=14).rsi()
+
+    # MACD
     macd = ta.trend.MACD(df["Close"])
     df["MACD"] = macd.macd()
     df["MACD_Signal"] = macd.macd_signal()
+
+    # Bollinger Bands
     bb = ta.volatility.BollingerBands(df["Close"], window=20, window_dev=2)
     df["BB_High"] = bb.bollinger_hband()
     df["BB_Low"] = bb.bollinger_lband()
+    df["BB_Width"] = df["BB_High"] - df["BB_Low"]
+
+    # ADX
+    adx = ta.trend.ADXIndicator(df["High"], df["Low"], df["Close"], window=14)
+    df["ADX"] = adx.adx()
+
+    # Stochastic Oscillator (using StochRSI)
+    stoch = ta.momentum.StochRSIIndicator(df["Close"], window=14)
+    df["Stoch_K"] = stoch.stochrsi_k()
+    df["Stoch_D"] = stoch.stochrsi_d()
+
+    # Lag Features
+    df["Lag_1"] = df["Close"].shift(1)
+    df["Lag_3"] = df["Close"].shift(3)
+    df["Lag_5"] = df["Close"].shift(5)
+
     return df
 
 def plot_candlestick(df):
@@ -119,40 +140,50 @@ else:
         with tab2:
             st.plotly_chart(plot_rsi_macd(df), use_container_width=True)
 
-        # ✅ Prediction Section
-        latest_features = df[["MACD", "MACD_Signal", "BB_High", "BB_Low", "Close"]].iloc[[-1]]
-        pred = model.predict(latest_features)[0]
-        prob = model.predict_proba(latest_features)[0]
-        direction = "📈 UP" if pred == 1 else "📉 DOWN"
-        confidence = f"{prob[pred]*100:.2f}%"
+        # ✅ Drop rows missing required features for prediction
+        required_features = [
+            "MACD", "MACD_Signal", "BB_High", "BB_Low", "BB_Width",
+            "ADX", "Stoch_K", "Stoch_D", "Lag_1", "Lag_3", "Lag_5"
+        ]
+        df = df.dropna(subset=required_features)
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Prediction", direction)
-        with col2:
-            st.metric("Confidence", confidence)
+        if not df.empty:
+            latest_features = df[required_features].iloc[[-1]]
+            pred = model.predict(latest_features)[0]
+            prob = model.predict_proba(latest_features)[0]
+            direction = "📈 UP" if pred == 1 else "📉 DOWN"
+            confidence = f"{prob[pred]*100:.2f}%"
 
-        # ✅ Save prediction
-        stock_name = ticker if source == "Live Yahoo Finance" else selected_file
-        save_prediction(stock_name, direction, confidence)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Prediction", direction)
+            with col2:
+                st.metric("Confidence", confidence)
 
-        # ✅ Show Prediction History
-        st.subheader("📝 Prediction History")
-        history_df = load_prediction_history()
-        st.dataframe(history_df)
+            # ✅ Save prediction
+            stock_name = ticker if source == "Live Yahoo Finance" else selected_file
+            save_prediction(stock_name, direction, confidence)
 
-        # ✅ Model Feature Importance
-        st.subheader("📊 Model Feature Importance")
-        if hasattr(model, "feature_importances_"):
-            features = ["MACD", "MACD_Signal", "BB_High", "BB_Low", "Close"]
-            fi_df = pd.DataFrame({"Feature": features, "Importance": model.feature_importances_})
-            st.plotly_chart(px.bar(fi_df, x="Feature", y="Importance", title="Feature Importance"), use_container_width=True)
+            # ✅ Show Prediction History
+            st.subheader("📝 Prediction History")
+            history_df = load_prediction_history()
+            st.dataframe(history_df)
+
+            # ✅ Model Feature Importance
+            st.subheader("📊 Model Feature Importance")
+            if hasattr(model, "feature_importances_"):
+                features = required_features
+                fi_df = pd.DataFrame({"Feature": features, "Importance": model.feature_importances_})
+                st.plotly_chart(px.bar(fi_df, x="Feature", y="Importance", title="Feature Importance"), use_container_width=True)
+        else:
+            st.warning("⚠️ Not enough data after computing required features for prediction.")
     else:
         st.warning("⚠️ No data available")
 
 # ✅ FOOTER
 st.markdown("---")
 st.caption("🚀 Built with Streamlit | AI Stock Predictor Dashboard")
+
 
 
 
