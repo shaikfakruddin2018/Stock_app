@@ -29,23 +29,38 @@ st.set_page_config(page_title="AI Stock Predictor Dashboard", page_icon="📈", 
 # ✅ FUNCTIONS
 def fetch_live_data(ticker, period="6mo"):
     df = yf.download(ticker, period=period, interval="1d")
+
+    # ✅ Flatten MultiIndex columns (if Yahoo returns multi-ticker data)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    # ✅ Reset index to get Date column
     df.reset_index(inplace=True)
+
+    # ✅ Ensure only required columns remain
+    expected_cols = ["Date", "Open", "High", "Low", "Close", "Volume"]
+    df = df[[c for c in expected_cols if c in df.columns]]
+
     return df
 
 def add_technical_indicators(df):
-    # ✅ Check if data is valid
-    if df is None or df.empty or "Close" not in df.columns or len(df) < 20:
-        st.warning("⚠️ Not enough data to calculate technical indicators.")
+    # ✅ Check for valid data
+    if df is None or df.empty:
+        st.warning("⚠️ No valid data to calculate indicators.")
         return df
 
-    # ✅ Ensure numeric
-    df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
-    df["High"] = pd.to_numeric(df["High"], errors="coerce")
-    df["Low"] = pd.to_numeric(df["Low"], errors="coerce")
+    if "Close" not in df.columns or df["Close"].ndim != 1:
+        st.error("❌ Invalid data format. Try another ticker.")
+        return pd.DataFrame()
+
+    # ✅ Ensure numeric columns
+    for col in ["Close", "High", "Low"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
     df = df.dropna(subset=["Close", "High", "Low"])
 
     if len(df) < 20:
-        st.warning("⚠️ Too few valid rows after cleaning for indicators.")
+        st.warning("⚠️ Too few rows after cleaning for indicators.")
         return df
 
     # ✅ RSI
@@ -205,5 +220,6 @@ else:
 # ✅ FOOTER
 st.markdown("---")
 st.caption("🚀 Built with Streamlit | AI Stock Predictor Dashboard")
+
 
 
