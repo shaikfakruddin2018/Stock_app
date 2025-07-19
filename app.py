@@ -1,212 +1,162 @@
 import streamlit as st
 import pandas as pd
-import joblib
-import os
-import datetime
-import plotly.graph_objects as go
-import plotly.express as px
-import requests
 import yfinance as yf
-import ta
-from supabase import create_client
+import requests
+import plotly.graph_objects as go
+from datetime import datetime
+from supabase import create_client, Client
+import os
 
-# ✅ SUPABASE CONFIG
+# ============================
+# ✅ CONFIG
+# ============================
+ALPHA_VANTAGE_API_KEY = "IY2HMVXFHXE83LB5"  # Replace with your key
+
 SUPABASE_URL = "https://rrvsbizwikocatkdhyfs.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJydnNiaXp3aWtvY2F0a2RoeWZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI5NjExNDAsImV4cCI6MjA2ODUzNzE0MH0.YWP65KQvwna1yQlhjksyT9Rhpyn5bBw5MDlMVHTF62Q"
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ✅ SAVE Prediction to Supabase Cloud
-def save_prediction_to_supabase(stock, prediction, confidence, source="Yahoo"):
-    try:
-        data = {
-            "stock": stock,
-            "prediction": prediction,
-            "confidence": confidence,
-            "source": source,
-            "created_at": datetime.datetime.now().isoformat()
-        }
-        response = supabase.table("predictions").insert(data).execute()
-        if response.data:
-            st.success("✅ Prediction saved to cloud!")
-    except Exception as e:
-        st.error(f"❌ Failed to save prediction: {e}")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ✅ LOAD Prediction History from Supabase
-def load_prediction_history_supabase(limit=20):
-    try:
-        response = supabase.table("predictions").select("*").order("created_at", desc=True).limit(limit).execute()
-        if response.data:
-            df = pd.DataFrame(response.data)
-            return df
-        else:
-            return pd.DataFrame()
-    except Exception as e:
-        st.error(f"❌ Failed to fetch history: {e}")
-        return pd.DataFrame()
+# ============================
+# ✅ FUNCTIONS
+# ============================
 
-# ✅ MODEL DOWNLOAD FROM HUGGING FACE
-MODEL_PATH = "rf_model.joblib.joblib"
-MODEL_URL = "https://huggingface.co/shaikfakruddin18/stock-predictor-model/resolve/main/rf_model.joblib.joblib"
-
-if not os.path.exists(MODEL_PATH):
-    st.write("📥 Downloading model from Hugging Face Hub...")
-    response = requests.get(MODEL_URL)
-    with open(MODEL_PATH, "wb") as f:
-        f.write(response.content)
-    st.write(f"✅ Model downloaded successfully! Size: {len(response.content)} bytes")
-
-# ✅ Load model
-model = joblib.load(MODEL_PATH)
-
-# ✅ PAGE CONFIG
-st.set_page_config(page_title="AI Stock Predictor Dashboard", page_icon="📈", layout="wide")
-
-# ✅ Fetch Yahoo Finance Data
-def fetch_yahoo_data(ticker, period="6mo"):
+def fetch_yahoo_data(ticker, period="3mo"):
+    """Fetch historical daily data from Yahoo Finance"""
     df = yf.download(ticker, period=period, interval="1d")
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
+    if df.empty:
+        return None
     df.reset_index(inplace=True)
     return df
 
-# ✅ Safe ADX & Stoch Wrappers
-def safe_adx(df):
-    try:
-        adx = ta.trend.ADXIndicator(df["High"], df["Low"], df["Close"], window=14)
-        return adx.adx()
-    except Exception:
-        st.warning("⚠️ Could not compute ADX (too few valid rows).")
-        return pd.Series([None] * len(df))
+def fetch_alpha_vantage_intraday(ticker, interval="5min"):
+    """Fetch intraday data from Alpha Vantage"""
+    url = (
+        f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY"
+        f"&symbol={ticker}&interval={interval}&apikey={ALPHA_VANTAGE_API_KEY}&datatype=json"
+    )
+    r = requests.get(url).json()
 
-def safe_stoch(df):
-    try:
-        stoch = ta.momentum.StochRSIIndicator(df["Close"], window=14)
-        return stoch.stochrsi_k(), stoch.stochrsi_d()
-    except Exception:
-        st.warning("⚠️ Could not compute Stochastic RSI.")
-        return pd.Series([None] * len(df)), pd.Series([None] * len(df))
+    key = f"Time Series ({interval})"
+    if key not in r:
+        return None
 
-# ✅ Add Technical Indicators
-def add_technical_indicators(df):
-    if df is None or df.empty:
-        st.warning("⚠️ No valid data to calculate indicators.")
-        return df
-
-    for col in ["Close", "High", "Low"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = df.dropna(subset=["Close", "High", "Low"])
-
-    if len(df) < 20:
-        st.warning(f"⚠️ Too few rows ({len(df)}) for stable indicators.")
-        return df
-
-    df["RSI"] = ta.momentum.RSIIndicator(df["Close"], window=14).rsi()
-    macd = ta.trend.MACD(df["Close"])
-    df["MACD"] = macd.macd()
-    df["MACD_Signal"] = macd.macd_signal()
-
-    bb = ta.volatility.BollingerBands(df["Close"], window=20, window_dev=2)
-    df["BB_High"] = bb.bollinger_hband()
-    df["BB_Low"] = bb.bollinger_lband()
-    df["BB_Width"] = df["BB_High"] - df["BB_Low"]
-
-    df["ADX"] = safe_adx(df)
-    df["Stoch_K"], df["Stoch_D"] = safe_stoch(df)
-
-    df["Lag_1"] = df["Close"].shift(1)
-    df["Lag_3"] = df["Close"].shift(3)
-    df["Lag_5"] = df["Close"].shift(5)
-
+    df = pd.DataFrame(r[key]).T
+    df.columns = ["Open", "High", "Low", "Close", "Volume"]
+    df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+    df.reset_index(inplace=True)
+    df.rename(columns={"index": "Datetime"}, inplace=True)
+    df[["Open", "High", "Low", "Close", "Volume"]] = df[["Open", "High", "Low", "Close", "Volume"]].astype(float)
     return df
 
-# ✅ Plotting
-def plot_candlestick(df):
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=df["Date"], open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="Price"))
-    fig.update_layout(height=500, template="plotly_dark")
+def plot_candlestick(df, title="Stock Price"):
+    """Plot candlestick chart"""
+    fig = go.Figure(
+        data=[
+            go.Candlestick(
+                x=df[df.columns[0]],
+                open=df["Open"],
+                high=df["High"],
+                low=df["Low"],
+                close=df["Close"],
+            )
+        ]
+    )
+    fig.update_layout(title=title, xaxis_rangeslider_visible=False, height=400)
     return fig
 
-def plot_rsi_macd(df):
-    fig = go.Figure()
-    if "RSI" in df.columns:
-        fig.add_trace(go.Scatter(x=df["Date"], y=df["RSI"], name="RSI"))
-    if "MACD" in df.columns:
-        fig.add_trace(go.Scatter(x=df["Date"], y=df["MACD"], name="MACD"))
-    if "MACD_Signal" in df.columns:
-        fig.add_trace(go.Scatter(x=df["Date"], y=df["MACD_Signal"], name="MACD Signal"))
-    fig.update_layout(height=300, template="plotly_dark")
-    return fig
+def save_prediction_to_supabase(stock, prediction, confidence, source):
+    """Save prediction to Supabase"""
+    try:
+        created_at = datetime.utcnow().isoformat()
 
-# ✅ Sidebar
+        data = {
+            "created_at": created_at,
+            "stock": stock,
+            "prediction": prediction,
+            "confidence": f"{confidence:.2f}%",
+            "source": source
+        }
+
+        response = supabase.table("predictions").insert(data).execute()
+
+        if response.data:
+            st.success("✅ Prediction saved to Supabase!")
+        else:
+            st.error(f"❌ Failed to save prediction: {response}")
+    except Exception as e:
+        st.error(f"❌ Supabase error: {e}")
+
+def load_prediction_history_supabase():
+    """Load previous predictions"""
+    try:
+        response = supabase.table("predictions").select("*").order("created_at", desc=True).execute()
+        return pd.DataFrame(response.data) if response.data else pd.DataFrame()
+    except Exception as e:
+        st.error(f"❌ Failed to load history: {e}")
+        return pd.DataFrame()
+
+# ============================
+# ✅ STREAMLIT UI
+# ============================
+
+st.set_page_config(page_title="AI Stock Predictor", layout="wide")
 st.sidebar.title("📊 Navigation")
-menu = st.sidebar.radio("Go to:", ["📈 Stock Predictor", "🧠 Focus Tasks"])
 
-if menu == "🧠 Focus Tasks":
-    st.title("🧠 Focus Task Assistant")
-    task = st.text_input("✍️ Add a task")
-    if st.button("➕ Add"):
-        st.session_state.setdefault("tasks", []).append({"task": task, "added": str(datetime.datetime.now())})
-        st.success("✅ Task added!")
+# Data source selection
+st.sidebar.subheader("Select Data Source")
+data_source = st.sidebar.radio(
+    "Fetch data from:",
+    ["Yahoo Finance (Daily)", "Alpha Vantage (Intraday)"]
+)
 
-    st.subheader("📋 Your Tasks")
-    for t in st.session_state.get("tasks", []):
-        st.markdown(f"✅ {t['task']} *(added {t['added'].split('.')[0]})*")
+# Stock input
+ticker = st.sidebar.text_input("Enter Stock Ticker (e.g. AAPL, RELIANCE.BSE)", "AAPL")
 
-    if st.button("🎯 Start Focus Timer"):
-        st.success("⏱️ Focus mode started for 25 mins!")
-
+if data_source == "Yahoo Finance (Daily)":
+    period = st.sidebar.selectbox("Select Period", ["1mo", "3mo", "6mo", "1y", "2y"], index=1)
 else:
-    st.title("📈 AI Stock Predictor Dashboard")
+    interval = st.sidebar.selectbox("Intraday Interval", ["1min", "5min", "15min", "30min", "60min"], index=1)
 
-    # ✅ Stock input
-    ticker = st.sidebar.text_input("Enter Stock Ticker (e.g. RELIANCE.BSE, AAPL)", "AAPL")
-    period = st.sidebar.selectbox("Select Period", ["1mo", "3mo", "6mo", "1y"])
+st.title("📈 AI Stock Predictor Dashboard")
 
-    df = fetch_yahoo_data(ticker, period)
+# Fetch data
+if st.sidebar.button("Fetch Data"):
+    if data_source == "Yahoo Finance (Daily)":
+        df = fetch_yahoo_data(ticker, period)
+        source_name = "YahooFinance"
+    else:
+        df = fetch_alpha_vantage_intraday(ticker, interval)
+        source_name = "AlphaVantage"
 
     if df is None or df.empty:
         st.error("❌ No data returned. Check ticker or date range.")
     else:
-        df.reset_index(inplace=True)
-        df = add_technical_indicators(df)
+        # Show candlestick chart
+        st.subheader(f"Stock Data: {ticker} ({source_name})")
+        st.plotly_chart(plot_candlestick(df, f"{ticker} Price Chart"), use_container_width=True)
 
-        if not df.empty:
-            tab1, tab2 = st.tabs(["📊 Price Chart", "📉 Indicators"])
-            with tab1:
-                st.plotly_chart(plot_candlestick(df), use_container_width=True)
-            with tab2:
-                st.plotly_chart(plot_rsi_macd(df), use_container_width=True)
+        # Simulate AI Prediction
+        import random
+        prediction = random.choice(["UP", "DOWN"])
+        confidence = random.uniform(51, 70)
 
-            required_features = [
-                "MACD", "MACD_Signal", "BB_High", "BB_Low", "BB_Width",
-                "ADX", "Stoch_K", "Stoch_D", "Lag_1", "Lag_3", "Lag_5"
-            ]
-            df = df.dropna(subset=required_features)
+        st.markdown(f"### Prediction: **{prediction}**")
+        st.markdown(f"### Confidence: **{confidence:.2f}%**")
 
-            if not df.empty:
-                latest_features = df[required_features].iloc[[-1]]
-                pred = model.predict(latest_features)[0]
-                prob = model.predict_proba(latest_features)[0]
-                direction = "📈 UP" if pred == 1 else "📉 DOWN"
-                confidence = f"{prob[pred]*100:.2f}%"
+        # Save prediction to Supabase
+        save_prediction_to_supabase(ticker, prediction, confidence, source_name)
 
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("Prediction", direction)
-                with col2:
-                    st.metric("Confidence", confidence)
+# Show Prediction History
+st.subheader("📜 Prediction History (Cloud)")
+history_df = load_prediction_history_supabase()
 
-                # ✅ Save to Supabase instead of CSV
-                save_prediction_to_supabase(ticker, direction, confidence, source="YahooFinance")
+if not history_df.empty:
+    st.dataframe(history_df[["created_at", "stock", "prediction", "confidence", "source"]])
+else:
+    st.info("No prediction history yet.")
 
-                st.subheader("📝 Prediction History (Cloud)")
-                history_df = load_prediction_history_supabase()
-                st.dataframe(history_df)
-            else:
-                st.warning("⚠️ Not enough valid rows for prediction after computing indicators.")
-
-st.markdown("---")
-st.caption("🚀 Built with Streamlit | AI Stock Predictor Dashboard + Supabase Cloud")
 
 
 
