@@ -5,7 +5,8 @@ import os
 import datetime
 import plotly.graph_objects as go
 import plotly.express as px
-import requests\import yfinance as yf
+import requests
+import yfinance as yf
 import ta  # for RSI, MACD, Bollinger Bands
 
 # ✅ MODEL DOWNLOAD FROM HUGGING FACE
