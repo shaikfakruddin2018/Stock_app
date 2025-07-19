@@ -1,11 +1,12 @@
 streamlit
 pandas
-joblib
-plotly
 yfinance
 requests
-ta
+plotly
 supabase
+joblib
+scikit-learn
+
 
 
 
