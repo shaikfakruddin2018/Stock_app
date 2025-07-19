@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import requests
 import yfinance as yf
-import ta  # for RSI, MACD, Bollinger Bands, ADX, etc.
+import ta
 
 # ✅ MODEL DOWNLOAD FROM HUGGING FACE
 MODEL_PATH = "rf_model.joblib.joblib"
@@ -29,19 +29,28 @@ st.set_page_config(page_title="AI Stock Predictor Dashboard", page_icon="📈", 
 # ✅ FUNCTIONS
 def fetch_live_data(ticker, period="6mo"):
     df = yf.download(ticker, period=period, interval="1d")
-
-    # ✅ Flatten MultiIndex columns (if Yahoo returns multi-ticker data)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-
-    # ✅ Reset index to get Date column
     df.reset_index(inplace=True)
-
-    # ✅ Ensure only required columns remain
     expected_cols = ["Date", "Open", "High", "Low", "Close", "Volume"]
     df = df[[c for c in expected_cols if c in df.columns]]
-
     return df
+
+def safe_adx(df):
+    try:
+        adx = ta.trend.ADXIndicator(df["High"], df["Low"], df["Close"], window=14)
+        return adx.adx()
+    except Exception:
+        st.warning("⚠️ Could not compute ADX (too few valid rows).")
+        return pd.Series([None] * len(df))
+
+def safe_stoch(df):
+    try:
+        stoch = ta.momentum.StochRSIIndicator(df["Close"], window=14)
+        return stoch.stochrsi_k(), stoch.stochrsi_d()
+    except Exception:
+        st.warning("⚠️ Could not compute Stochastic RSI.")
+        return pd.Series([None] * len(df)), pd.Series([None] * len(df))
 
 def add_technical_indicators(df):
     if df is None or df.empty:
@@ -52,47 +61,27 @@ def add_technical_indicators(df):
         st.error("❌ Invalid data format. Try another ticker.")
         return pd.DataFrame()
 
-    # Ensure numeric
     for col in ["Close", "High", "Low"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-
     df = df.dropna(subset=["Close", "High", "Low"])
 
-    # ✅ Require at least 20 rows for stable indicators
     if len(df) < 20:
-        st.warning(f"⚠️ Too few rows ({len(df)}) for indicators. Try a longer period.")
+        st.warning(f"⚠️ Too few rows ({len(df)}) for stable indicators. Try a longer period.")
         return df
 
-    # ✅ RSI
     df["RSI"] = ta.momentum.RSIIndicator(df["Close"], window=14).rsi()
-
-    # ✅ MACD
     macd = ta.trend.MACD(df["Close"])
     df["MACD"] = macd.macd()
     df["MACD_Signal"] = macd.macd_signal()
 
-    # ✅ Bollinger Bands
     bb = ta.volatility.BollingerBands(df["Close"], window=20, window_dev=2)
     df["BB_High"] = bb.bollinger_hband()
     df["BB_Low"] = bb.bollinger_lband()
     df["BB_Width"] = df["BB_High"] - df["BB_Low"]
 
-    # ✅ Only compute ADX if enough rows
-    if len(df) >= 15:
-        adx = ta.trend.ADXIndicator(df["High"], df["Low"], df["Close"], window=14)
-        df["ADX"] = adx.adx()
-    else:
-        df["ADX"] = None
+    df["ADX"] = safe_adx(df)
+    df["Stoch_K"], df["Stoch_D"] = safe_stoch(df)
 
-    # ✅ Only compute Stoch if enough rows
-    if len(df) >= 15:
-        stoch = ta.momentum.StochRSIIndicator(df["Close"], window=14)
-        df["Stoch_K"] = stoch.stochrsi_k()
-        df["Stoch_D"] = stoch.stochrsi_d()
-    else:
-        df["Stoch_K"], df["Stoch_D"] = None, None
-
-    # ✅ Lag Features
     df["Lag_1"] = df["Close"].shift(1)
     df["Lag_3"] = df["Close"].shift(3)
     df["Lag_5"] = df["Close"].shift(5)
@@ -150,7 +139,6 @@ if menu == "🧠 Focus Tasks":
 else:
     st.title("📈 AI Stock Predictor Dashboard")
 
-    # ✅ Choose Data Source
     source = st.sidebar.radio("📂 Select Data Source", ["Local CSV", "Live Yahoo Finance"])
 
     if source == "Live Yahoo Finance":
@@ -163,7 +151,6 @@ else:
         selected_file = st.sidebar.selectbox("Select Stock CSV", files)
         df = pd.read_csv(os.path.join(data_dir, selected_file))
 
-    # ✅ Normalize Date column
     if df is not None and not df.empty:
         if "Date" not in df.columns:
             if df.index.name in ["Date", "Datetime", None]:
@@ -176,14 +163,12 @@ else:
         df = add_technical_indicators(df)
 
         if not df.empty:
-            # ✅ Tabs for multiple timeframes
             tab1, tab2 = st.tabs(["📊 Price Chart", "📉 Indicators"])
             with tab1:
                 st.plotly_chart(plot_candlestick(df), use_container_width=True)
             with tab2:
                 st.plotly_chart(plot_rsi_macd(df), use_container_width=True)
 
-            # ✅ Drop rows missing required features for prediction
             required_features = [
                 "MACD", "MACD_Signal", "BB_High", "BB_Low", "BB_Width",
                 "ADX", "Stoch_K", "Stoch_D", "Lag_1", "Lag_3", "Lag_5"
@@ -203,16 +188,13 @@ else:
                 with col2:
                     st.metric("Confidence", confidence)
 
-                # ✅ Save prediction
                 stock_name = ticker if source == "Live Yahoo Finance" else selected_file
                 save_prediction(stock_name, direction, confidence)
 
-                # ✅ Show Prediction History
                 st.subheader("📝 Prediction History")
                 history_df = load_prediction_history()
                 st.dataframe(history_df)
 
-                # ✅ Model Feature Importance
                 st.subheader("📊 Model Feature Importance")
                 if hasattr(model, "feature_importances_"):
                     features = required_features
@@ -223,9 +205,9 @@ else:
         else:
             st.warning("⚠️ Data invalid or too short for indicators.")
 
-# ✅ FOOTER
 st.markdown("---")
 st.caption("🚀 Built with Streamlit | AI Stock Predictor Dashboard")
+
 
 
 
