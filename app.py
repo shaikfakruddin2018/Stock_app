@@ -103,6 +103,12 @@ else:
         selected_file = st.sidebar.selectbox("Select Stock CSV", files)
         df = pd.read_csv(os.path.join(data_dir, selected_file))
 
+    # ✅ Normalize Date column to avoid KeyError
+    if "Date" not in df.columns:
+        if df.index.name in ["Date", "Datetime", None]:
+            df = df.reset_index()
+        df.rename(columns={df.columns[0]: "Date"}, inplace=True)
+
     if not df.empty:
         df = add_technical_indicators(df)
 
@@ -147,5 +153,6 @@ else:
 # ✅ FOOTER
 st.markdown("---")
 st.caption("🚀 Built with Streamlit | AI Stock Predictor Dashboard")
+
 
 
