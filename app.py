@@ -7,7 +7,8 @@ import plotly.graph_objects as go
 
 # ✅ MODEL AUTO-DOWNLOAD (using gdown for reliable Google Drive fetch)
 MODEL_PATH = "rf_model.joblib"
-MODEL_ID = "1TGCp1gcj9b4Ju7Oein-lghBQ3b4jHorF"  # Google Drive File ID
+MODEL_ID = "1TGCp1gcj9b4Ju7Oein-lghBQ3b4jHorF"
+
 
 # Install gdown if not present
 try:
