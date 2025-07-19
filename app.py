@@ -33,30 +33,45 @@ def fetch_live_data(ticker, period="6mo"):
     return df
 
 def add_technical_indicators(df):
-    # RSI for visualization only
+    # ✅ Check if data is valid
+    if df is None or df.empty or "Close" not in df.columns or len(df) < 20:
+        st.warning("⚠️ Not enough data to calculate technical indicators.")
+        return df
+
+    # ✅ Ensure numeric
+    df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+    df["High"] = pd.to_numeric(df["High"], errors="coerce")
+    df["Low"] = pd.to_numeric(df["Low"], errors="coerce")
+    df = df.dropna(subset=["Close", "High", "Low"])
+
+    if len(df) < 20:
+        st.warning("⚠️ Too few valid rows after cleaning for indicators.")
+        return df
+
+    # ✅ RSI
     df["RSI"] = ta.momentum.RSIIndicator(df["Close"], window=14).rsi()
 
-    # MACD
+    # ✅ MACD
     macd = ta.trend.MACD(df["Close"])
     df["MACD"] = macd.macd()
     df["MACD_Signal"] = macd.macd_signal()
 
-    # Bollinger Bands
+    # ✅ Bollinger Bands
     bb = ta.volatility.BollingerBands(df["Close"], window=20, window_dev=2)
     df["BB_High"] = bb.bollinger_hband()
     df["BB_Low"] = bb.bollinger_lband()
     df["BB_Width"] = df["BB_High"] - df["BB_Low"]
 
-    # ADX
+    # ✅ ADX
     adx = ta.trend.ADXIndicator(df["High"], df["Low"], df["Close"], window=14)
     df["ADX"] = adx.adx()
 
-    # Stochastic Oscillator (using StochRSI)
+    # ✅ Stochastic Oscillator
     stoch = ta.momentum.StochRSIIndicator(df["Close"], window=14)
     df["Stoch_K"] = stoch.stochrsi_k()
     df["Stoch_D"] = stoch.stochrsi_d()
 
-    # Lag Features
+    # ✅ Lag Features
     df["Lag_1"] = df["Close"].shift(1)
     df["Lag_3"] = df["Close"].shift(3)
     df["Lag_5"] = df["Close"].shift(5)
@@ -71,9 +86,12 @@ def plot_candlestick(df):
 
 def plot_rsi_macd(df):
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df["Date"], y=df["RSI"], name="RSI"))
-    fig.add_trace(go.Scatter(x=df["Date"], y=df["MACD"], name="MACD"))
-    fig.add_trace(go.Scatter(x=df["Date"], y=df["MACD_Signal"], name="MACD Signal"))
+    if "RSI" in df.columns:
+        fig.add_trace(go.Scatter(x=df["Date"], y=df["RSI"], name="RSI"))
+    if "MACD" in df.columns:
+        fig.add_trace(go.Scatter(x=df["Date"], y=df["MACD"], name="MACD"))
+    if "MACD_Signal" in df.columns:
+        fig.add_trace(go.Scatter(x=df["Date"], y=df["MACD_Signal"], name="MACD Signal"))
     fig.update_layout(height=300, template="plotly_dark")
     return fig
 
@@ -124,66 +142,68 @@ else:
         selected_file = st.sidebar.selectbox("Select Stock CSV", files)
         df = pd.read_csv(os.path.join(data_dir, selected_file))
 
-    # ✅ Normalize Date column to avoid KeyError
-    if "Date" not in df.columns:
-        if df.index.name in ["Date", "Datetime", None]:
-            df = df.reset_index()
-        df.rename(columns={df.columns[0]: "Date"}, inplace=True)
+    # ✅ Normalize Date column
+    if df is not None and not df.empty:
+        if "Date" not in df.columns:
+            if df.index.name in ["Date", "Datetime", None]:
+                df = df.reset_index()
+            df.rename(columns={df.columns[0]: "Date"}, inplace=True)
 
-    if not df.empty:
+    if df is None or df.empty:
+        st.error("❌ No data returned. Check ticker or date range.")
+    else:
         df = add_technical_indicators(df)
 
-        # ✅ Tabs for multiple timeframes
-        tab1, tab2 = st.tabs(["📊 Price Chart", "📉 Indicators"])
-        with tab1:
-            st.plotly_chart(plot_candlestick(df), use_container_width=True)
-        with tab2:
-            st.plotly_chart(plot_rsi_macd(df), use_container_width=True)
-
-        # ✅ Drop rows missing required features for prediction
-        required_features = [
-            "MACD", "MACD_Signal", "BB_High", "BB_Low", "BB_Width",
-            "ADX", "Stoch_K", "Stoch_D", "Lag_1", "Lag_3", "Lag_5"
-        ]
-        df = df.dropna(subset=required_features)
-
         if not df.empty:
-            latest_features = df[required_features].iloc[[-1]]
-            pred = model.predict(latest_features)[0]
-            prob = model.predict_proba(latest_features)[0]
-            direction = "📈 UP" if pred == 1 else "📉 DOWN"
-            confidence = f"{prob[pred]*100:.2f}%"
+            # ✅ Tabs for multiple timeframes
+            tab1, tab2 = st.tabs(["📊 Price Chart", "📉 Indicators"])
+            with tab1:
+                st.plotly_chart(plot_candlestick(df), use_container_width=True)
+            with tab2:
+                st.plotly_chart(plot_rsi_macd(df), use_container_width=True)
 
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Prediction", direction)
-            with col2:
-                st.metric("Confidence", confidence)
+            # ✅ Drop rows missing required features for prediction
+            required_features = [
+                "MACD", "MACD_Signal", "BB_High", "BB_Low", "BB_Width",
+                "ADX", "Stoch_K", "Stoch_D", "Lag_1", "Lag_3", "Lag_5"
+            ]
+            df = df.dropna(subset=required_features)
 
-            # ✅ Save prediction
-            stock_name = ticker if source == "Live Yahoo Finance" else selected_file
-            save_prediction(stock_name, direction, confidence)
+            if not df.empty:
+                latest_features = df[required_features].iloc[[-1]]
+                pred = model.predict(latest_features)[0]
+                prob = model.predict_proba(latest_features)[0]
+                direction = "📈 UP" if pred == 1 else "📉 DOWN"
+                confidence = f"{prob[pred]*100:.2f}%"
 
-            # ✅ Show Prediction History
-            st.subheader("📝 Prediction History")
-            history_df = load_prediction_history()
-            st.dataframe(history_df)
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Prediction", direction)
+                with col2:
+                    st.metric("Confidence", confidence)
 
-            # ✅ Model Feature Importance
-            st.subheader("📊 Model Feature Importance")
-            if hasattr(model, "feature_importances_"):
-                features = required_features
-                fi_df = pd.DataFrame({"Feature": features, "Importance": model.feature_importances_})
-                st.plotly_chart(px.bar(fi_df, x="Feature", y="Importance", title="Feature Importance"), use_container_width=True)
+                # ✅ Save prediction
+                stock_name = ticker if source == "Live Yahoo Finance" else selected_file
+                save_prediction(stock_name, direction, confidence)
+
+                # ✅ Show Prediction History
+                st.subheader("📝 Prediction History")
+                history_df = load_prediction_history()
+                st.dataframe(history_df)
+
+                # ✅ Model Feature Importance
+                st.subheader("📊 Model Feature Importance")
+                if hasattr(model, "feature_importances_"):
+                    features = required_features
+                    fi_df = pd.DataFrame({"Feature": features, "Importance": model.feature_importances_})
+                    st.plotly_chart(px.bar(fi_df, x="Feature", y="Importance", title="Feature Importance"), use_container_width=True)
+            else:
+                st.warning("⚠️ Not enough valid rows for prediction after computing indicators.")
         else:
-            st.warning("⚠️ Not enough data after computing required features for prediction.")
-    else:
-        st.warning("⚠️ No data available")
+            st.warning("⚠️ Data invalid or too short for indicators.")
 
 # ✅ FOOTER
 st.markdown("---")
 st.caption("🚀 Built with Streamlit | AI Stock Predictor Dashboard")
-
-
 
 
