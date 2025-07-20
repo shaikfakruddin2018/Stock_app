@@ -4,7 +4,7 @@ requests
 yfinance
 joblib
 scikit-learn
-supabase-py
+
 
 
 
