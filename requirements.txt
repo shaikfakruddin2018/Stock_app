@@ -1,9 +1,11 @@
 streamlit
 pandas
 requests
+plotly
 yfinance
 joblib
 scikit-learn
+supabase-py
 
 
 
