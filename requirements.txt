@@ -3,8 +3,10 @@ pandas
 requests
 plotly
 yfinance
-scikit-learn
 joblib
+scikit-learn
+supabase-py
+
 
 
 
